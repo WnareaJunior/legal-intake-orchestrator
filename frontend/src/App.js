@@ -783,7 +783,7 @@ function MessageDetailModal({ message, onClose, onDecision, getStatusBadge }) {
             <p className="text-sm text-gray-700 dark:text-gray-300">{draft.recommended_action}</p>
           </div>
         )}
-
+        
         {/* Email/Response Body */}
         <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
           <div className="bg-gray-50 dark:bg-gray-800 px-4 py-3 border-b border-gray-200 dark:border-gray-700">
@@ -905,6 +905,75 @@ function MessageDetailModal({ message, onClose, onDecision, getStatusBadge }) {
                     </p>
                   )}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Multi-Provider Detection */}
+          {message.provider_count > 1 && message.provider_drafts && (
+            <div className="mb-6 p-4 bg-purple-50 dark:bg-purple-500/10 border-2 border-purple-300 dark:border-purple-500/30 rounded-xl">
+              <div className="flex items-start gap-3 mb-4">
+                <span className="text-3xl">🎯</span>
+                <div className="flex-1">
+                  <p className="text-lg font-bold text-purple-900 dark:text-purple-300 mb-2">
+                    Multi-Provider Workflow Detected!
+                  </p>
+                  <p className="text-sm text-purple-800 dark:text-purple-400">
+                    Agent detected <span className="font-bold">{message.provider_count} separate medical providers</span> in this message. 
+                    Each will receive a customized records request.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-purple-900 dark:text-purple-300 mb-2">
+                  INDIVIDUAL REQUESTS GENERATED:
+                </p>
+                {message.provider_drafts.map((providerDraft, idx) => (
+                  <div 
+                    key={idx}
+                    className="bg-white dark:bg-purple-900/20 rounded-lg p-3 border border-purple-200 dark:border-purple-700"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <span className="font-medium text-purple-900 dark:text-purple-300">
+                          {idx + 1}. {providerDraft.provider_name}
+                        </span>
+                        <span className="ml-2 text-xs px-2 py-0.5 bg-purple-100 dark:bg-purple-800 text-purple-700 dark:text-purple-300 rounded">
+                          {providerDraft.provider_type}
+                        </span>
+                      </div>
+                    </div>
+                    {providerDraft.specific_provider_context?.treatment_context && (
+                      <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">
+                        📋 {providerDraft.specific_provider_context.treatment_context}
+                      </p>
+                    )}
+                    {providerDraft.specific_provider_context?.specific_dates && (
+                      <p className="text-xs text-gray-600 dark:text-gray-400">
+                        📅 {providerDraft.specific_provider_context.specific_dates}
+                      </p>
+                    )}
+                    
+                    {/* Show a preview of the email */}
+                    <details className="mt-2">
+                      <summary className="text-xs text-purple-600 dark:text-purple-400 cursor-pointer hover:underline">
+                        View draft email →
+                      </summary>
+                      <div className="mt-2 p-2 bg-gray-50 dark:bg-gray-900 rounded text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-pre-wrap max-h-40 overflow-y-auto">
+                        {providerDraft.body}
+                      </div>
+                    </details>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 p-3 bg-white dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-700">
+                <p className="text-xs text-purple-900 dark:text-purple-300">
+                  <span className="font-bold">💡 Workflow Intelligence:</span> Most AI systems would generate a single generic request. 
+                  Our agent detected the complexity, identified each provider, and generated {message.provider_count} separate HIPAA-compliant requests 
+                  with provider-specific context.
+                </p>
               </div>
             </div>
           )}

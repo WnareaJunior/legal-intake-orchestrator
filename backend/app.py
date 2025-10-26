@@ -31,6 +31,52 @@ AGENTS = {
 messages = []
 message_counter = 0
 
+def process_multi_provider_message(message):
+    """
+    Process a message that may have multiple providers
+    Returns the message with provider-specific drafts
+    """
+    task_type = message['task_type']
+    
+    if task_type != 'records_request':
+        return message  # Not a records request
+    
+    agent = AGENTS.get(task_type)
+    if not agent:
+        return message
+    
+    try:
+        agent_result = agent.process(message['raw_text'])
+        
+        if not agent_result.get('success', False):
+            message['draft'] = agent_result
+            message['status'] = 'draft_ready'
+            return message
+        
+        # Check if multiple providers detected
+        provider_count = agent_result.get('provider_count', 1)
+        
+        if provider_count > 1 and agent_result.get('requires_multiple_requests', False):
+            # Generate individual drafts for each provider
+            individual_drafts = agent.generate_individual_drafts(agent_result)
+            
+            message['draft'] = agent_result  # Master draft
+            message['provider_drafts'] = individual_drafts  # Individual drafts
+            message['status'] = 'multi_provider_ready'
+            message['agent_used'] = agent_result.get('agent')
+            message['provider_count'] = provider_count
+        else:
+            # Single provider
+            message['draft'] = agent_result
+            message['status'] = 'draft_ready'
+            message['agent_used'] = agent_result.get('agent')
+            message['provider_count'] = 1
+        
+        return message
+        
+    except Exception as e:
+        print(f"Error processing multi-provider: {e}")
+        return message
 
 def create_demo_data():
     """Pre-populate with 5 demo messages"""
@@ -242,6 +288,12 @@ Respond ONLY with valid JSON in this exact format:
     except Exception as e:
         return jsonify({"error": f"Classification failed: {str(e)}"}), 500
 
+@app.route('/generate_complex_message', methods=['GET'])
+def generate_complex_message():
+    """Generate a complex multi-provider test message"""
+    return jsonify({
+        "message": "Hi, I need medical records for my car accident case. I'm Sarah Martinez, DOB 6/15/1988. After the accident on May 15th, I was taken to Orlando Health ER, then transferred to Florida Hospital for surgery on May 16th. I had follow-up appointments with Dr. Patel at the orthopedic clinic in June, and also saw Dr. Anderson for physical therapy at AdventHealth from June through August. I need all records from all these providers ASAP for my case. Thanks!"
+    })
 
 @app.route('/generate_draft/<int:message_id>', methods=['POST'])
 def generate_draft(message_id):
@@ -254,7 +306,6 @@ def generate_draft(message_id):
     
     task_type = message['task_type']
     
-    # Check if we have an agent for this task type
     if task_type not in AGENTS:
         return jsonify({
             "error": f"No agent available for task type: {task_type}",
@@ -262,11 +313,9 @@ def generate_draft(message_id):
         }), 400
     
     try:
-        # Route to specialist agent
         agent = AGENTS[task_type]
         print(f"Routing to {agent.agent_name} for message {message_id}")
         
-        # Agent processes autonomously
         agent_result = agent.process(message['raw_text'])
         
         if not agent_result.get('success', False):
@@ -275,11 +324,24 @@ def generate_draft(message_id):
                 "details": agent_result.get('error', 'Unknown error')
             }), 500
         
-        # Update message with agent's output
-        message['draft'] = agent_result
-        message['status'] = 'draft_ready'
-        message['agent_used'] = agent_result.get('agent')
-        message['agent_quality'] = agent.get_quality_score(agent_result)
+        # Check for multi-provider
+        provider_count = agent_result.get('provider_count', 1)
+        
+        if provider_count > 1 and task_type == 'records_request':
+            # Multi-provider detected!
+            message['draft'] = agent_result
+            message['provider_count'] = provider_count
+            message['status'] = 'multi_provider_ready'
+            message['agent_used'] = agent_result.get('agent')
+            
+            # Generate individual drafts
+            if hasattr(agent, 'generate_individual_drafts'):
+                message['provider_drafts'] = agent.generate_individual_drafts(agent_result)
+        else:
+            # Single provider
+            message['draft'] = agent_result
+            message['status'] = 'draft_ready'
+            message['agent_used'] = agent_result.get('agent')
         
         return jsonify(message)
         

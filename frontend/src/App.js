@@ -5,6 +5,7 @@ function App() {
   const [bulkProgress, setBulkProgress] = useState(null);
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [bulkMessages, setBulkMessages] = useState('');
+  const [processingStatus, setProcessingStatus] = useState('');
   const [messages, setMessages] = useState([]);
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [filter, setFilter] = useState('all');
@@ -97,9 +98,9 @@ function App() {
 
     setBulkProcessing(true);
     setError('');
+    setProcessingStatus('Classifying messages...');
 
     try {
-      // Split by newlines, filter empty
       const messageArray = bulkMessages
         .split('\n')
         .map(m => m.trim())
@@ -118,6 +119,7 @@ function App() {
       }
 
       const startTime = Date.now();
+      setProcessingStatus(`Processing ${messageArray.length} messages in parallel...`);
 
       const res = await fetch(`${API_URL}/process_bulk`, {
         method: 'POST',
@@ -136,6 +138,8 @@ function App() {
         actual_duration: duration
       });
 
+      setProcessingStatus('');
+
       // Refresh messages
       await fetchMessages();
 
@@ -143,6 +147,7 @@ function App() {
 
     } catch (err) {
       setError(err.message);
+      setProcessingStatus('');
     } finally {
       setBulkProcessing(false);
     }
@@ -398,45 +403,72 @@ function App() {
       {/* Bulk Processing Modal */}
       {showBulkModal && (
         <Modal onClose={() => {
-          setShowBulkModal(false);
-          setBulkMessages('');
-          setBulkProgress(null);
-          setError('');
+          if (!bulkProcessing) {
+            setShowBulkModal(false);
+            setBulkMessages('');
+            setBulkProgress(null);
+            setProcessingStatus('');
+            setError('');
+          }
         }}>
-          <h2 className="text-2xl font-bold mb-4 text-gray-900 dark:text-white">
+          <h2 className="text-2xl font-bold mb-2 text-gray-900 dark:text-white">
             ⚡ Bulk Process Messages
           </h2>
           
           <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-            Process multiple messages simultaneously. Enter one message per line (max 100).
+            Process multiple messages simultaneously with parallel agent orchestration.
+            Our multi-agent system handles classification, validation, and draft generation at scale.
           </p>
 
-          <div className="flex gap-2 mb-4">
-            <button
-              onClick={loadTestMessages}
-              className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white text-sm rounded-lg transition-all duration-200"
-            >
-              Load 20 Test Messages
-            </button>
-            <button
-              onClick={() => setBulkMessages('')}
-              className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white text-sm rounded-lg transition-all duration-200"
-            >
-              Clear
-            </button>
-          </div>
+          {!bulkProgress && (
+            <>
+              <div className="flex gap-2 mb-4">
+                <button
+                  onClick={loadTestMessages}
+                  disabled={bulkProcessing}
+                  className="px-4 py-2 bg-gray-600 hover:bg-gray-700 disabled:bg-gray-400 text-white text-sm rounded-lg transition-all duration-200"
+                >
+                  Load 20 Test Messages
+                </button>
+                <button
+                  onClick={() => setBulkMessages('')}
+                  disabled={bulkProcessing}
+                  className="px-4 py-2 bg-gray-600 hover:bg-gray-700 disabled:bg-gray-400 text-white text-sm rounded-lg transition-all duration-200"
+                >
+                  Clear
+                </button>
+              </div>
 
-          <textarea
-            value={bulkMessages}
-            onChange={(e) => setBulkMessages(e.target.value)}
-            placeholder="Paste messages here (one per line)...
+              <textarea
+                value={bulkMessages}
+                onChange={(e) => setBulkMessages(e.target.value)}
+                disabled={bulkProcessing}
+                placeholder="Paste messages here (one per line)...
 
       Example:
       Hi I need my records from Dr. Smith. John Doe, DOB 3/20/1985.
       Can we schedule a consultation next week? - Sarah Johnson
       Checking on case status, case #12345..."
-            className="w-full h-64 p-4 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent mb-4 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 transition-all duration-200 text-sm font-mono"
-          />
+                className="w-full h-64 p-4 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent mb-4 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 transition-all duration-200 text-sm font-mono disabled:opacity-50"
+              />
+            </>
+          )}
+
+          {processingStatus && (
+            <div className="mb-4 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-xl p-4">
+              <div className="flex items-center gap-3">
+                <div className="animate-spin text-2xl">⚡</div>
+                <div className="flex-1">
+                  <p className="font-medium text-blue-900 dark:text-blue-300">
+                    {processingStatus}
+                  </p>
+                  <p className="text-sm text-blue-700 dark:text-blue-400 mt-1">
+                    Agents are working in parallel - validating quality, generating drafts...
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {error && (
             <div className="mb-4 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-700 dark:text-red-400 px-4 py-3 rounded-lg text-sm">
@@ -445,59 +477,105 @@ function App() {
           )}
 
           {bulkProgress && (
-            <div className="mb-4 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded-xl p-4">
-              <p className="text-lg font-bold text-emerald-900 dark:text-emerald-300 mb-3">
-                ✓ Bulk Processing Complete!
+            <div className="mb-4 bg-emerald-50 dark:bg-emerald-500/10 border-2 border-emerald-200 dark:border-emerald-500/20 rounded-xl p-5">
+              <p className="text-xl font-bold text-emerald-900 dark:text-emerald-300 mb-4 flex items-center gap-2">
+                <span>✓</span> Bulk Processing Complete!
               </p>
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="text-gray-700 dark:text-gray-300">
-                  <span className="font-medium">Total Messages:</span> {bulkProgress.total}
+              
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div className="bg-white dark:bg-emerald-900/20 rounded-lg p-3">
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Total Messages</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{bulkProgress.total}</p>
                 </div>
-                <div className="text-gray-700 dark:text-gray-300">
-                  <span className="font-medium">Successful:</span> {bulkProgress.successful}
+                <div className="bg-white dark:bg-emerald-900/20 rounded-lg p-3">
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Success Rate</p>
+                  <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                    {Math.round((bulkProgress.successful / bulkProgress.total) * 100)}%
+                  </p>
                 </div>
-                <div className="text-gray-700 dark:text-gray-300">
-                  <span className="font-medium">Failed:</span> {bulkProgress.failed}
+                <div className="bg-white dark:bg-emerald-900/20 rounded-lg p-3">
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Processing Time</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{bulkProgress.actual_duration}s</p>
                 </div>
-                <div className="text-gray-700 dark:text-gray-300">
-                  <span className="font-medium">Duration:</span> {bulkProgress.actual_duration}s
-                </div>
-                <div className="col-span-2 text-gray-700 dark:text-gray-300">
-                  <span className="font-medium">Speed:</span> {bulkProgress.messages_per_second} messages/second
-                </div>
-                <div className="col-span-2 text-gray-700 dark:text-gray-300">
-                  <span className="font-medium">Time Saved:</span> {(bulkProgress.total * 15 / 60).toFixed(1)} paralegal hours
+                <div className="bg-white dark:bg-emerald-900/20 rounded-lg p-3">
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Throughput</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {bulkProgress.messages_per_second.toFixed(1)} msg/s
+                  </p>
                 </div>
               </div>
+
+              <div className="bg-white dark:bg-emerald-900/20 rounded-lg p-4 border border-emerald-200 dark:border-emerald-700">
+                <p className="text-sm font-medium text-gray-900 dark:text-white mb-2">📊 Impact Analysis</p>
+                <div className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
+                  <div className="flex justify-between">
+                    <span>Manual Processing Time:</span>
+                    <span className="font-medium">{(bulkProgress.total * 15)} minutes ({(bulkProgress.total * 15 / 60).toFixed(1)} hours)</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Automated Processing Time:</span>
+                    <span className="font-medium">{bulkProgress.actual_duration} seconds</span>
+                  </div>
+                  <div className="flex justify-between border-t border-emerald-200 dark:border-emerald-700 pt-2 mt-2">
+                    <span className="font-bold">Time Saved:</span>
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                      {((bulkProgress.total * 15 * 60) / parseFloat(bulkProgress.actual_duration)).toFixed(0)}x faster
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <p className="text-xs text-gray-600 dark:text-gray-400 mt-4 italic">
+                Note: Processing includes classification, quality validation, and HIPAA-compliant draft generation with multi-agent orchestration.
+              </p>
             </div>
           )}
 
           <div className="flex justify-end gap-3">
-            <button
-              onClick={() => {
-                setShowBulkModal(false);
-                setBulkMessages('');
-                setBulkProgress(null);
-                setError('');
-              }}
-              className="px-5 py-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all duration-200"
-            >
-              Close
-            </button>
-            <button
-              onClick={handleBulkProcess}
-              disabled={bulkProcessing}
-              className="px-6 py-2.5 bg-gradient-to-r from-purple-600 to-purple-500 hover:from-purple-700 hover:to-purple-600 disabled:from-gray-400 disabled:to-gray-400 text-white rounded-lg font-medium shadow-lg shadow-purple-500/30 hover:shadow-xl hover:shadow-purple-500/40 transition-all duration-200 hover:scale-[1.02] disabled:scale-100 disabled:cursor-not-allowed"
-            >
-              {bulkProcessing ? (
-                <span className="flex items-center gap-2">
-                  <span className="animate-spin">⚡</span> Processing...
-                </span>
-              ) : 'Process All'}
-            </button>
+            {bulkProgress ? (
+              <button
+                onClick={() => {
+                  setShowBulkModal(false);
+                  setBulkMessages('');
+                  setBulkProgress(null);
+                  setProcessingStatus('');
+                  setError('');
+                }}
+                className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 text-white rounded-lg font-medium shadow-lg shadow-emerald-500/30 hover:shadow-xl hover:shadow-emerald-500/40 transition-all duration-200 hover:scale-[1.02]"
+              >
+                Done
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => {
+                    setShowBulkModal(false);
+                    setBulkMessages('');
+                    setBulkProgress(null);
+                    setProcessingStatus('');
+                    setError('');
+                  }}
+                  disabled={bulkProcessing}
+                  className="px-5 py-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-all duration-200 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleBulkProcess}
+                  disabled={bulkProcessing || !bulkMessages.trim()}
+                  className="px-6 py-2.5 bg-gradient-to-r from-purple-600 to-purple-500 hover:from-purple-700 hover:to-purple-600 disabled:from-gray-400 disabled:to-gray-400 text-white rounded-lg font-medium shadow-lg shadow-purple-500/30 hover:shadow-xl hover:shadow-purple-500/40 transition-all duration-200 hover:scale-[1.02] disabled:scale-100 disabled:cursor-not-allowed"
+                >
+                  {bulkProcessing ? (
+                    <span className="flex items-center gap-2">
+                      <span className="animate-spin">⚡</span> Processing...
+                    </span>
+                  ) : 'Process All'}
+                </button>
+              </>
+            )}
           </div>
         </Modal>
-      )}          
+      )}       
 
       {/* Message Detail Modal */}
       {selectedMessage && (

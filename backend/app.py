@@ -350,8 +350,8 @@ def process_all():
 @app.route('/process_bulk', methods=['POST'])
 def process_bulk():
     """
-    Process multiple messages in parallel - SPEED DEMON MODE
-    Accepts array of message texts, processes all simultaneously
+    Process multiple messages in TRUE PARALLEL - SPEED DEMON MODE
+    Uses batch classification and parallel agent processing
     """
     data = request.json
     message_texts = data.get('messages', [])
@@ -365,102 +365,125 @@ def process_bulk():
     print(f"🚀 BULK PROCESSING: {len(message_texts)} messages")
     start_time = datetime.now()
     
-    # Step 1: Classify all messages in parallel
+    global message_counter
+    
+    # Step 1: Quick classification (simplified for speed)
     classified_messages = []
     
     for idx, text in enumerate(message_texts):
-        global message_counter
+        message_counter += 1
         
-        # Quick classification (we'll use a simplified version for speed)
-        try:
-            # Use classifier
-            classification_prompt = f"""Analyze this message quickly. Respond ONLY with JSON:
-{{
-    "task_type": "records_request|scheduling|status_update|other",
-    "confidence": 0.9,
-    "author": "Name or Unknown",
-    "header": "Brief subject (max 50 chars)"
-}}
-
-Message: {text}"""
-            
-            response = classifier_model.generate_content(classification_prompt)
-            result_text = response.text.strip()
-            
-            if result_text.startswith('```'):
-                result_text = result_text.split('```')[1]
-                if result_text.startswith('json'):
-                    result_text = result_text[4:]
-            result_text = result_text.strip()
-            
-            classification = json.loads(result_text)
-            
-            message_counter += 1
-            message_data = {
-                "id": message_counter,
-                "raw_text": text,
-                "author": classification.get('author', 'Unknown Client'),
-                "header": classification.get('header', 'New Message'),
-                "task_type": classification['task_type'],
-                "confidence": classification.get('confidence', 0.8),
-                "reasoning": f"Bulk processed message {idx + 1}",
-                "timestamp": datetime.now().isoformat(),
-                "draft": None,
-                "status": "classified",
-                "bulk_batch": True
-            }
-            
-            classified_messages.append(message_data)
-            messages.append(message_data)
-            
-        except Exception as e:
-            print(f"Classification failed for message {idx + 1}: {e}")
-            continue
+        # Fast heuristic classification (no Gemini call for speed)
+        task_type = "other"
+        confidence = 0.75
+        author = "Unknown Client"
+        
+        text_lower = text.lower()
+        
+        # Simple keyword matching for speed
+        if any(word in text_lower for word in ["record", "medical", "hospital", "doctor", "dr.", "treatment"]):
+            task_type = "records_request"
+            confidence = 0.85
+        elif any(word in text_lower for word in ["schedule", "reschedule", "appointment", "meeting", "consultation"]):
+            task_type = "scheduling"
+            confidence = 0.80
+        elif any(word in text_lower for word in ["status", "update", "case", "progress", "checking"]):
+            task_type = "status_update"
+            confidence = 0.80
+        
+        # Try to extract name (simple heuristic)
+        words = text.split()
+        if len(words) >= 2:
+            # Look for "I'm NAME" or "This is NAME" or "NAME here"
+            for i, word in enumerate(words):
+                if word.lower() in ["im", "i'm", "this", "is"] and i + 1 < len(words):
+                    potential_name = words[i + 1:min(i + 3, len(words))]
+                    author = " ".join(potential_name).strip(",.!?")
+                    break
+        
+        message_data = {
+            "id": message_counter,
+            "raw_text": text,
+            "author": author,
+            "header": f"{task_type.replace('_', ' ').title()} - {author}",
+            "task_type": task_type,
+            "confidence": confidence,
+            "reasoning": f"Fast bulk classification (message {idx + 1}/{len(message_texts)})",
+            "timestamp": datetime.now().isoformat(),
+            "draft": None,
+            "status": "classified",
+            "bulk_batch": True
+        }
+        
+        classified_messages.append(message_data)
+        messages.append(message_data)
     
-    # Step 2: Process drafts in parallel using thread pool
-    def process_single_message(msg):
-        """Process a single message with an agent"""
-        task_type = msg['task_type']
-        
-        if task_type not in AGENTS:
-            return {
-                "id": msg['id'],
-                "success": False,
-                "error": "No agent for this task type"
-            }
-        
-        try:
-            agent = AGENTS[task_type]
-            agent_result = agent.process(msg['raw_text'])
-            
-            if agent_result.get('success', False):
-                msg['draft'] = agent_result
-                msg['status'] = 'draft_ready'
-                msg['agent_used'] = agent_result.get('agent')
-                
-                return {
-                    "id": msg['id'],
-                    "success": True,
-                    "agent": agent.agent_name,
-                    "quality": agent_result.get('quality_score', 0)
-                }
-            else:
-                return {
-                    "id": msg['id'],
-                    "success": False,
-                    "error": agent_result.get('error', 'Unknown error')
-                }
-                
-        except Exception as e:
-            return {
-                "id": msg['id'],
-                "success": False,
-                "error": str(e)
-            }
+    print(f"✓ Classified {len(classified_messages)} messages in {(datetime.now() - start_time).total_seconds():.2f}s")
     
-    # Process all messages in parallel
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        results = list(executor.map(process_single_message, classified_messages))
+    # Step 2: Process drafts in BATCHES (5 at a time to avoid rate limits)
+    batch_size = 5
+    results = []
+    
+    for batch_start in range(0, len(classified_messages), batch_size):
+        batch = classified_messages[batch_start:batch_start + batch_size]
+        batch_results = []
+        
+        print(f"Processing batch {batch_start // batch_size + 1} ({len(batch)} messages)...")
+        
+        # Process batch with thread pool
+        with ThreadPoolExecutor(max_workers=batch_size) as executor:
+            def process_single(msg):
+                task_type = msg['task_type']
+                
+                if task_type not in AGENTS:
+                    return {
+                        "id": msg['id'],
+                        "success": False,
+                        "error": "No agent for this task type"
+                    }
+                
+                try:
+                    agent = AGENTS[task_type]
+                    # Reduce retries for speed
+                    original_retries = agent.max_retries
+                    agent.max_retries = 1  # Only 1 attempt in bulk mode
+                    
+                    agent_result = agent.process(msg['raw_text'])
+                    
+                    agent.max_retries = original_retries  # Restore
+                    
+                    if agent_result.get('success', False):
+                        msg['draft'] = agent_result
+                        msg['status'] = 'draft_ready'
+                        msg['agent_used'] = agent_result.get('agent')
+                        
+                        return {
+                            "id": msg['id'],
+                            "success": True,
+                            "agent": agent.agent_name,
+                            "quality": agent_result.get('quality_score', 0)
+                        }
+                    else:
+                        return {
+                            "id": msg['id'],
+                            "success": False,
+                            "error": agent_result.get('error', 'Unknown error')
+                        }
+                        
+                except Exception as e:
+                    return {
+                        "id": msg['id'],
+                        "success": False,
+                        "error": str(e)
+                    }
+            
+            batch_results = list(executor.map(process_single, batch))
+        
+        results.extend(batch_results)
+        
+        # Small delay between batches (not between individual messages)
+        if batch_start + batch_size < len(classified_messages):
+            time.sleep(0.5)
     
     # Calculate metrics
     end_time = datetime.now()
@@ -483,7 +506,6 @@ Message: {text}"""
         "results": results,
         "new_messages": [m['id'] for m in classified_messages]
     })
-
 
 @app.route('/generate_test_messages', methods=['GET'])
 def generate_test_messages():

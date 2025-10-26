@@ -14,7 +14,7 @@ class BaseAgent(ABC):
     Focuses on QUALITY over speed.
     """
     
-    def __init__(self, model_name: str = 'gemini-2.0-flash-exp'):
+    def __init__(self, model_name: str = 'gemini-2.5-flash'):
         self.model = genai.GenerativeModel(model_name)
         self.max_retries = 3  # Increased from 2
         self.agent_name = self.__class__.__name__

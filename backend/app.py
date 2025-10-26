@@ -7,13 +7,15 @@ import json
 import time
 from datetime import datetime, timedelta
 from agents import RecordsWranglerAgent, SchedulingAgent, StatusAgent
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 # Load environment variables
 load_dotenv()
 
 # Configure Gemini
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-classifier_model = genai.GenerativeModel('gemini-2.0-flash-exp')
+classifier_model = genai.GenerativeModel('gemini-2.5-flash')
 
 app = Flask(__name__)
 CORS(app)
@@ -116,8 +118,8 @@ def create_demo_data():
                 print(f"✗ Demo message {idx + 1} failed: {agent_result.get('error')}")
             
             # Small delay to avoid rate limits
-            if idx < len(demo_messages) - 1:
-                time.sleep(0.5)
+            #if idx < len(demo_messages) - 1:
+                #time.sleep(0.5)
         
         messages.append(message_data)
     
@@ -345,6 +347,195 @@ def process_all():
         "results": results
     })
 
+@app.route('/process_bulk', methods=['POST'])
+def process_bulk():
+    """
+    Process multiple messages in parallel - SPEED DEMON MODE
+    Accepts array of message texts, processes all simultaneously
+    """
+    data = request.json
+    message_texts = data.get('messages', [])
+    
+    if not message_texts or len(message_texts) == 0:
+        return jsonify({"error": "No messages provided"}), 400
+    
+    if len(message_texts) > 100:
+        return jsonify({"error": "Maximum 100 messages at once"}), 400
+    
+    print(f"🚀 BULK PROCESSING: {len(message_texts)} messages")
+    start_time = datetime.now()
+    
+    # Step 1: Classify all messages in parallel
+    classified_messages = []
+    
+    for idx, text in enumerate(message_texts):
+        global message_counter
+        
+        # Quick classification (we'll use a simplified version for speed)
+        try:
+            # Use classifier
+            classification_prompt = f"""Analyze this message quickly. Respond ONLY with JSON:
+{{
+    "task_type": "records_request|scheduling|status_update|other",
+    "confidence": 0.9,
+    "author": "Name or Unknown",
+    "header": "Brief subject (max 50 chars)"
+}}
+
+Message: {text}"""
+            
+            response = classifier_model.generate_content(classification_prompt)
+            result_text = response.text.strip()
+            
+            if result_text.startswith('```'):
+                result_text = result_text.split('```')[1]
+                if result_text.startswith('json'):
+                    result_text = result_text[4:]
+            result_text = result_text.strip()
+            
+            classification = json.loads(result_text)
+            
+            message_counter += 1
+            message_data = {
+                "id": message_counter,
+                "raw_text": text,
+                "author": classification.get('author', 'Unknown Client'),
+                "header": classification.get('header', 'New Message'),
+                "task_type": classification['task_type'],
+                "confidence": classification.get('confidence', 0.8),
+                "reasoning": f"Bulk processed message {idx + 1}",
+                "timestamp": datetime.now().isoformat(),
+                "draft": None,
+                "status": "classified",
+                "bulk_batch": True
+            }
+            
+            classified_messages.append(message_data)
+            messages.append(message_data)
+            
+        except Exception as e:
+            print(f"Classification failed for message {idx + 1}: {e}")
+            continue
+    
+    # Step 2: Process drafts in parallel using thread pool
+    def process_single_message(msg):
+        """Process a single message with an agent"""
+        task_type = msg['task_type']
+        
+        if task_type not in AGENTS:
+            return {
+                "id": msg['id'],
+                "success": False,
+                "error": "No agent for this task type"
+            }
+        
+        try:
+            agent = AGENTS[task_type]
+            agent_result = agent.process(msg['raw_text'])
+            
+            if agent_result.get('success', False):
+                msg['draft'] = agent_result
+                msg['status'] = 'draft_ready'
+                msg['agent_used'] = agent_result.get('agent')
+                
+                return {
+                    "id": msg['id'],
+                    "success": True,
+                    "agent": agent.agent_name,
+                    "quality": agent_result.get('quality_score', 0)
+                }
+            else:
+                return {
+                    "id": msg['id'],
+                    "success": False,
+                    "error": agent_result.get('error', 'Unknown error')
+                }
+                
+        except Exception as e:
+            return {
+                "id": msg['id'],
+                "success": False,
+                "error": str(e)
+            }
+    
+    # Process all messages in parallel
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(executor.map(process_single_message, classified_messages))
+    
+    # Calculate metrics
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+    
+    successful = sum(1 for r in results if r.get('success', False))
+    failed = len(results) - successful
+    
+    print(f"✓ BULK COMPLETE: {successful}/{len(results)} successful in {duration:.2f}s")
+    
+    return jsonify({
+        "message": f"Bulk processing complete",
+        "total": len(message_texts),
+        "classified": len(classified_messages),
+        "processed": len(results),
+        "successful": successful,
+        "failed": failed,
+        "duration_seconds": round(duration, 2),
+        "messages_per_second": round(len(results) / duration, 2) if duration > 0 else 0,
+        "results": results,
+        "new_messages": [m['id'] for m in classified_messages]
+    })
+
+
+@app.route('/generate_test_messages', methods=['GET'])
+def generate_test_messages():
+    """
+    Generate realistic test messages for bulk processing demo
+    Returns 20 sample messages
+    """
+    templates = [
+        "Hi I need my medical records from {provider}. My name is {name}, DOB {dob}. I was treated for {condition} on {date}.",
+        "Hey its {name}, can I get records from {provider}? Birth date {dob}, saw them for {condition} last month.",
+        "Need records ASAP from Dr. {provider}! {name} born {dob}, treatment for {condition}.",
+        "Hello, this is {name}. Can we schedule a consultation next week? Any day works for me.",
+        "Hi {name} here, need to reschedule my appointment from Thursday to sometime next week.",
+        "Can we move my {appt_type} to {day}? This is {name}, thanks!",
+        "Just checking on my case status. {name}, case #{case_num}. Haven't heard back in a while.",
+        "Hey, any updates on case #{case_num}? This is {name}.",
+        "Status update please? {name}, need to know where we are with my case."
+    ]
+    
+    names = ["John Smith", "Sarah Johnson", "Mike Chen", "Lisa Brown", "David Martinez", 
+             "Emily Davis", "James Wilson", "Maria Garcia", "Robert Taylor", "Jennifer Lee"]
+    providers = ["Orlando Health", "Florida Hospital", "Dr. Patel", "Dr. Smith", "AdventHealth",
+                 "Mayo Clinic", "Johns Hopkins", "Dr. Anderson", "Cleveland Clinic"]
+    conditions = ["car accident injuries", "slip and fall", "workplace injury", "motorcycle accident",
+                  "medical malpractice", "dog bite incident", "construction injury"]
+    dates = ["May 15th", "last Tuesday", "June 3rd", "two weeks ago", "last month"]
+    dobs = ["3/20/1985", "6/12/1990", "4/5/1978", "8/15/1982", "11/22/1975"]
+    case_nums = ["12345", "67890", "11223", "44556", "77889"]
+    appt_types = ["consultation", "follow-up", "initial meeting", "case review"]
+    days = ["Monday", "next week", "Friday afternoon", "Tuesday morning"]
+    
+    import random
+    
+    messages = []
+    for i in range(20):
+        template = random.choice(templates)
+        message = template.format(
+            name=random.choice(names),
+            provider=random.choice(providers),
+            dob=random.choice(dobs),
+            condition=random.choice(conditions),
+            date=random.choice(dates),
+            case_num=random.choice(case_nums),
+            appt_type=random.choice(appt_types),
+            day=random.choice(days)
+        )
+        messages.append(message)
+    
+    return jsonify({
+        "count": len(messages),
+        "messages": messages
+    })
 
 @app.route('/messages', methods=['GET'])
 def get_messages():

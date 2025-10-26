@@ -393,6 +393,17 @@ function MessageCard({ message, onClick, getTaskTypeColor, getTaskTypeLabel, get
               <span className="font-medium">{(message.confidence * 100).toFixed(0)}%</span>
               <span className="text-xs">confidence</span>
             </span>
+            {message.draft?.quality_score && (
+              <>
+                <span>•</span>
+                <span className="flex items-center gap-1">
+                  <span className={`font-medium ${message.draft.quality_score >= 0.85 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                    {(message.draft.quality_score * 100).toFixed(0)}%
+                  </span>
+                  <span className="text-xs">quality</span>
+                </span>
+              </>
+            )}
             <span>•</span>
             <span>{getTimeAgo(message.timestamp)}</span>
             <span>•</span>
@@ -604,6 +615,37 @@ function MessageDetailModal({ message, onClose, onDecision, getStatusBadge }) {
               </div>
             </div>
           </div>
+
+          {message.draft?.requires_human_review && (
+            <div className="mb-6 p-4 bg-red-50 dark:bg-red-500/10 rounded-xl border-2 border-red-300 dark:border-red-500/30">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl">⚠️</span>
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-red-900 dark:text-red-300 mb-2">
+                    QUALITY CHECK FAILED - REQUIRES HUMAN REVIEW
+                  </p>
+                  <p className="text-sm text-red-800 dark:text-red-400 mb-3">
+                    Agent detected critical issues and refused to proceed. Manual intervention required.
+                  </p>
+                  {message.draft.quality_issues && message.draft.quality_issues.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-red-900 dark:text-red-300 mb-1">Issues Detected:</p>
+                      <ul className="text-sm text-red-800 dark:text-red-300 list-disc list-inside space-y-1">
+                        {message.draft.quality_issues.map((issue, i) => (
+                          <li key={i}>{issue}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {message.draft.attempt && (
+                    <p className="text-xs text-red-700 dark:text-red-400 mt-2">
+                      Failed after {message.draft.attempt} attempt{message.draft.attempt > 1 ? 's' : ''}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Draft Content - Renders based on agent type */}
           {renderDraftContent()}

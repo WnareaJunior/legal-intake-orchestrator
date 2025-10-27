@@ -1,6 +1,19 @@
+// NOTE: This is a 1038-line monster file - everything in one component!
+// For a hackathon this is totally fine and actually makes it easier to demo
+// TODO: When this goes to production, break this up into:
+// - components/ folder (MessageCard, Modal, MessageDetailModal, etc)
+// - hooks/ folder (useMessages, useBulkProcessing, etc)
+// - utils/ folder (api calls, formatters)
+// - contexts/ folder (ThemeContext for dark mode)
+// But honestly, for a demo this is perfect - easy to understand the whole flow
+
 import React, { useState, useEffect } from 'react';
 
 function App() {
+  // NOTE: That's a lot of useState calls - 15 of them!
+  // TODO: Could use useReducer to manage related state together
+  // Or React Context for things like darkMode, messages, etc
+  // But for now it's readable and works great
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [bulkProgress, setBulkProgress] = useState(null);
   const [showBulkModal, setShowBulkModal] = useState(false);
@@ -21,6 +34,8 @@ function App() {
     return localStorage.getItem('darkMode') === 'true';
   });
 
+  // TODO: This should be in an env var like REACT_APP_API_URL
+  // But hardcoding localhost:5000 is fine for local dev
   const API_URL = 'http://localhost:5000';
 
   useEffect(() => {
@@ -37,6 +52,9 @@ function App() {
   }, []);
 
   const fetchMessages = async () => {
+    // TODO: Add loading states, error handling, retry logic
+    // Could use React Query or SWR here for caching + auto-refetch
+    // But for now a simple fetch works perfectly
     try {
       const res = await fetch(`${API_URL}/messages`);
       const data = await res.json();
@@ -45,10 +63,13 @@ function App() {
     } catch (err) {
       console.error('Failed to fetch messages:', err);
       setInitialLoading(false);
+      // TODO: Show error to user, not just console.error
     }
   };
 
   const handleNewMessage = async () => {
+    // NOTE: This does two API calls in sequence: classify, then generate_draft
+    // Could be combined into one endpoint but separating them is more flexible
     if (!newMessageText.trim()) {
       setError('Please enter a message');
       return;
@@ -58,6 +79,7 @@ function App() {
     setError('');
 
     try {
+      // Step 1: Classify the message
       const classifyRes = await fetch(`${API_URL}/classify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -65,32 +87,36 @@ function App() {
       });
 
       if (!classifyRes.ok) throw new Error('Classification failed');
-      
+
       const classified = await classifyRes.json();
-      
-      // Generate draft for any agent type
+
+      // Step 2: Generate draft with appropriate agent
       const draftRes = await fetch(`${API_URL}/generate_draft/${classified.id}`, {
         method: 'POST'
       });
-      
+
       if (draftRes.ok) {
         const withDraft = await draftRes.json();
-        setMessages([withDraft, ...messages]);
+        setMessages([withDraft, ...messages]);  // Add to top of list
       } else {
-        setMessages([classified, ...messages]);
+        setMessages([classified, ...messages]);  // Add classified message even if draft fails
       }
 
+      // Clear form and close modal
       setNewMessageText('');
       setShowNewMessageModal(false);
 
     } catch (err) {
       setError(err.message);
+      // TODO: Could add retry logic here
     } finally {
       setLoading(false);
     }
   };
 
   const handleBulkProcess = async () => {
+    // NOTE: This is the coolest feature - processes 20 messages in ~40 seconds
+    // The UI shows real-time progress and metrics - great for demos
     if (!bulkMessages.trim()) {
       setError('Please enter messages (one per line)');
       return;
@@ -101,6 +127,7 @@ function App() {
     setProcessingStatus('Classifying messages...');
 
     try {
+      // Parse messages - one per line, skip empty lines
       const messageArray = bulkMessages
         .split('\n')
         .map(m => m.trim())
@@ -118,9 +145,11 @@ function App() {
         return;
       }
 
+      // Track client-side duration for accurate metrics
       const startTime = Date.now();
       setProcessingStatus(`Processing ${messageArray.length} messages in parallel...`);
 
+      // Single API call processes all messages in parallel batches
       const res = await fetch(`${API_URL}/process_bulk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -133,14 +162,15 @@ function App() {
       const endTime = Date.now();
       const duration = ((endTime - startTime) / 1000).toFixed(2);
 
+      // Show results with metrics
       setBulkProgress({
         ...result,
-        actual_duration: duration
+        actual_duration: duration  // Client-measured duration
       });
 
       setProcessingStatus('');
 
-      // Refresh messages
+      // Refresh messages list to show new entries
       await fetchMessages();
 
       setBulkMessages('');
@@ -197,7 +227,12 @@ function App() {
     return m.task_type === filter;
   });
 
+  // NOTE: These utility functions should probably be in a separate file
+  // Like src/utils/taskTypes.js or something
+  // But for a single component app, keeping them here is fine
   const getTaskTypeColor = (taskType) => {
+    // Tailwind classes for different task types
+    // Using /10 opacity is a nice touch for subtle backgrounds
     const colors = {
       records_request: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20',
       scheduling: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20',
@@ -229,10 +264,13 @@ function App() {
   };
 
   const getTimeAgo = (timestamp) => {
+    // Simple relative time formatter
+    // TODO: Could use a library like date-fns or day.js for more features
+    // But this basic version works great for the demo
     const now = new Date();
     const then = new Date(timestamp);
     const diffMinutes = Math.floor((now - then) / 60000);
-    
+
     if (diffMinutes < 1) return 'Just now';
     if (diffMinutes < 60) return `${diffMinutes} mins ago`;
     const diffHours = Math.floor(diffMinutes / 60);
@@ -240,9 +278,17 @@ function App() {
     return `${Math.floor(diffHours / 24)} days ago`;
   };
 
+  // NOTE: The return statement is HUGE - 590 lines of JSX!
+  // TODO: Break this up into smaller components:
+  // - Header component
+  // - FilterTabs component
+  // - MessageList component
+  // - BulkProcessModal component
+  // But for now, it's actually pretty readable since it's all in one place
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 transition-colors duration-200">
       {/* Header */}
+      {/* NOTE: Nice touch with the sticky header and blur effect */}
       <div className="sticky top-0 z-20 backdrop-blur-xl bg-white/80 dark:bg-gray-900/80 border-b border-gray-200 dark:border-gray-800 shadow-sm">
         <div className="container mx-auto px-4 lg:px-6 py-4">
           <div className="flex items-center justify-between">
@@ -590,7 +636,14 @@ function App() {
   );
 }
 
+// ============================================================================
+// SUB-COMPONENTS
+// NOTE: These are defined at the bottom of the file - works for hackathons
+// TODO: Move these to separate files in components/ folder
+// ============================================================================
+
 // Filter Tab Component
+// Simple button with active state styling
 function FilterTab({ active, onClick, label, count }) {
   return (
     <button
@@ -607,6 +660,7 @@ function FilterTab({ active, onClick, label, count }) {
 }
 
 // Skeleton Loading Card
+// NOTE: Nice loading state with animate-pulse - better UX than spinners
 function SkeletonCard() {
   return (
     <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-5 animate-pulse">
@@ -623,9 +677,12 @@ function SkeletonCard() {
 }
 
 // Message Card Component
+// NOTE: This is a pretty complex card with lots of info
+// Shows confidence, quality score, status, agent used, etc
+// The hover effects are nice - border color change + shadow
 function MessageCard({ message, onClick, getTaskTypeColor, getTaskTypeLabel, getStatusBadge, getTimeAgo, style }) {
   const statusBadge = getStatusBadge(message.status);
-  
+
   return (
     <div
       onClick={onClick}
@@ -688,13 +745,17 @@ function MessageCard({ message, onClick, getTaskTypeColor, getTaskTypeLabel, get
 }
 
 // Modal Component
+// NOTE: Simple modal with backdrop blur and click-outside-to-close
+// The stopPropagation prevents closing when clicking inside the modal
+// TODO: Add escape key handler to close modal
+// TODO: Focus trap for accessibility
 function Modal({ children, onClose }) {
   return (
-    <div 
+    <div
       className="fixed inset-0 bg-black/50 dark:bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn"
       onClick={onClose}
     >
-      <div 
+      <div
         className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-2xl w-full p-6 animate-slideUp"
         onClick={(e) => e.stopPropagation()}
       >
@@ -705,6 +766,14 @@ function Modal({ children, onClose }) {
 }
 
 // Message Detail Modal Component - NOW HANDLES ALL AGENT TYPES
+// NOTE: This is the biggest component - 330 lines!
+// Shows the full message detail with draft, extracted info, and actions
+// Handles multi-provider display which is really impressive
+// TODO: Break this into smaller components:
+// - DraftPreview
+// - MultiProviderDisplay
+// - ExtractedInfoCard
+// - ActionButtons
 function MessageDetailModal({ message, onClose, onDecision, getStatusBadge }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editedSubject, setEditedSubject] = useState(message.draft?.subject || '');
@@ -723,6 +792,11 @@ function MessageDetailModal({ message, onClose, onDecision, getStatusBadge }) {
   const statusBadge = getStatusBadge(message.status);
 
   // Render different UI based on agent type
+  // NOTE: This function handles displaying drafts from all 3 agent types
+  // Records agents show extracted patient info
+  // Scheduling agents show calendar invite details
+  // Status agents show recommended actions
+  // Pretty clean polymorphism here
   const renderDraftContent = () => {
     if (!message.draft) {
       return (
@@ -910,6 +984,9 @@ function MessageDetailModal({ message, onClose, onDecision, getStatusBadge }) {
           )}
 
           {/* Multi-Provider Detection */}
+          {/* NOTE: This section is the star of the demo! */}
+          {/* Shows how one message can generate 5+ separate draft emails */}
+          {/* The purple theme and collapsible drafts make it look really professional */}
           {message.provider_count > 1 && message.provider_drafts && (
             <div className="mb-6 p-4 bg-purple-50 dark:bg-purple-500/10 border-2 border-purple-300 dark:border-purple-500/30 rounded-xl">
               <div className="flex items-start gap-3 mb-4">
@@ -919,7 +996,7 @@ function MessageDetailModal({ message, onClose, onDecision, getStatusBadge }) {
                     Multi-Provider Workflow Detected!
                   </p>
                   <p className="text-sm text-purple-800 dark:text-purple-400">
-                    Agent detected <span className="font-bold">{message.provider_count} separate medical providers</span> in this message. 
+                    Agent detected <span className="font-bold">{message.provider_count} separate medical providers</span> in this message.
                     Each will receive a customized records request.
                   </p>
                 </div>

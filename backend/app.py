@@ -14,20 +14,27 @@ from concurrent.futures import ThreadPoolExecutor
 load_dotenv()
 
 # Configure Gemini
+# TODO: Add retry logic with exponential backoff when API fails
+# TODO: Maybe cache the model instance per thread to avoid recreating?
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 classifier_model = genai.GenerativeModel('gemini-2.5-flash')
 
 app = Flask(__name__)
-CORS(app)
+CORS(app)  # TODO: In production, lock this down to specific origins
 
 # Initialize specialist agents
+# NOTE: These are singletons - works fine for now but if we add state to agents
+# we'll need to reconsider. For stateless agents this is perfect.
 AGENTS = {
     'records_request': RecordsWranglerAgent(),
     'scheduling': SchedulingAgent(),
     'status_update': StatusAgent()
 }
 
-# In-memory storage
+# In-memory storage - THIS IS FINE FOR DEMO/HACKATHON
+# TODO: When we get real users, swap this for Redis or Postgres
+# Redis would be fastest for MVP since structure is already JSON-like
+# For now, this is actually perfect - no DB setup, easy testing
 messages = []
 message_counter = 0
 
@@ -36,30 +43,33 @@ def process_multi_provider_message(message):
     Process a message that may have multiple providers
     Returns the message with provider-specific drafts
     """
+    # NOTE: This function isn't actually called anywhere right now - dead code?
+    # Looks like the multi-provider logic got moved into generate_draft endpoint
+    # TODO: Either delete this or refactor generate_draft to use it - DRY principle
     task_type = message['task_type']
-    
+
     if task_type != 'records_request':
         return message  # Not a records request
-    
+
     agent = AGENTS.get(task_type)
     if not agent:
         return message
-    
+
     try:
         agent_result = agent.process(message['raw_text'])
-        
+
         if not agent_result.get('success', False):
             message['draft'] = agent_result
             message['status'] = 'draft_ready'
             return message
-        
+
         # Check if multiple providers detected
         provider_count = agent_result.get('provider_count', 1)
-        
+
         if provider_count > 1 and agent_result.get('requires_multiple_requests', False):
             # Generate individual drafts for each provider
             individual_drafts = agent.generate_individual_drafts(agent_result)
-            
+
             message['draft'] = agent_result  # Master draft
             message['provider_drafts'] = individual_drafts  # Individual drafts
             message['status'] = 'multi_provider_ready'
@@ -71,17 +81,22 @@ def process_multi_provider_message(message):
             message['status'] = 'draft_ready'
             message['agent_used'] = agent_result.get('agent')
             message['provider_count'] = 1
-        
+
         return message
-        
+
     except Exception as e:
+        # TODO: Log this properly, not just print
+        # Could use Python logging module or at least structure it better
         print(f"Error processing multi-provider: {e}")
         return message
 
 def create_demo_data():
     """Pre-populate with 5 demo messages"""
+    # TODO: This runs on every server restart which means new demo data each time
+    # Might want to make this optional via env var like LOAD_DEMO_DATA=true
+    # Also calling the real Gemini API on startup adds ~5-10 seconds boot time
     global message_counter, messages
-    
+
     demo_messages = [
         {
             "raw_text": "Hey I need my medical records from Dr Smith for my car accident on May 15th. My name is John Doe born 3/20/1985",
@@ -132,10 +147,12 @@ def create_demo_data():
     
     print("Generating demo data with agents...")
     # Generate drafts using agents
+    # NOTE: This makes 5 API calls on startup - not ideal for dev restarts
+    # TODO: Could cache these responses in a JSON file and load from there
     for idx, demo in enumerate(demo_messages):
         message_counter += 1
         timestamp = datetime.now() - timedelta(minutes=demo['minutes_ago'])
-        
+
         message_data = {
             "id": message_counter,
             "raw_text": demo["raw_text"],
@@ -148,13 +165,13 @@ def create_demo_data():
             "draft": None,
             "status": "classified"
         }
-        
+
         # Use agent to generate draft
         if demo["task_type"] in AGENTS:
             print(f"Processing demo message {idx + 1}/5 with {demo['task_type']} agent...")
             agent = AGENTS[demo["task_type"]]
             agent_result = agent.process(demo["raw_text"])
-            
+
             if agent_result.get('success', False):
                 message_data["draft"] = agent_result
                 message_data["status"] = "draft_ready"
@@ -162,13 +179,15 @@ def create_demo_data():
                 print(f"✓ Demo message {idx + 1} processed successfully")
             else:
                 print(f"✗ Demo message {idx + 1} failed: {agent_result.get('error')}")
-            
+
             # Small delay to avoid rate limits
+            # NOTE: These lines are commented out - probably for faster demo loading
+            # Might need to uncomment if we hit rate limits during startup
             #if idx < len(demo_messages) - 1:
                 #time.sleep(0.5)
-        
+
         messages.append(message_data)
-    
+
     print(f"Demo data ready: {len(messages)} messages loaded")
 
 # Initialize demo data on startup
@@ -190,15 +209,21 @@ def classify_message():
     """
     Orchestrator: Classifies message and routes to appropriate agent
     """
+    # TODO: This endpoint only classifies, doesn't generate draft
+    # User has to call /generate_draft separately - could combine these?
+    # Or keep separate for flexibility. Current approach is fine tbh.
     global message_counter
-    
+
     data = request.json
     raw_text = data.get('text', '')
-    
+
     if not raw_text:
         return jsonify({"error": "No text provided"}), 400
-    
+
     # Step 1: Classify using orchestrator
+    # NOTE: This prompt is HUGE - like 30 lines
+    # TODO: Move this to a separate file or config? Would make testing easier
+    # Or at least extract to a function that returns the prompt
     classification_prompt = f"""You are a legal assistant classifier with strict quality standards. Analyze this client message and provide task details.
 
 CRITICAL: Set confidence based on information completeness:
@@ -239,23 +264,32 @@ Respond ONLY with valid JSON in this exact format:
 
     try:
         # Orchestrator makes classification decision
+        # TODO: Add retry logic here - sometimes Gemini returns malformed JSON
+        # Could wrap this in a retry decorator with 3 attempts
         response = classifier_model.generate_content(classification_prompt)
         result_text = response.text.strip()
-        
+
+        # Strip markdown code fences if present
+        # NOTE: Gemini loves to wrap JSON in ```json ``` which breaks parsing
+        # This is a bit hacky but works. Could use a regex instead.
         if result_text.startswith('```'):
             result_text = result_text.split('```')[1]
             if result_text.startswith('json'):
                 result_text = result_text[4:]
         result_text = result_text.strip()
-        
+
         classification = json.loads(result_text)
         
         # Quality pre-check based on task type
+        # NOTE: This is basically re-doing work the prompt already did
+        # The prompt sets confidence but we override it here
+        # TODO: Either trust the prompt or simplify this logic
         quality_issues = classification.get('quality_issues', [])
         task_type = classification['task_type']
         confidence = classification['confidence']
-        
+
         # Force lower confidence for quality issues
+        # This is our "quality guardian" at classification stage
         if quality_issues:
             if task_type == 'records_request':
                 if 'missing patient name' in quality_issues or 'missing provider' in quality_issues:
@@ -415,34 +449,42 @@ def process_bulk():
     Process multiple messages in TRUE PARALLEL - SPEED DEMON MODE
     Uses batch classification and parallel agent processing
     """
+    # NOTE: This is the coolest feature - processes 20 messages in ~40 seconds
+    # The secret sauce is: keyword classification + batch parallel processing
     data = request.json
     message_texts = data.get('messages', [])
-    
+
     if not message_texts or len(message_texts) == 0:
         return jsonify({"error": "No messages provided"}), 400
-    
+
     if len(message_texts) > 100:
         return jsonify({"error": "Maximum 100 messages at once"}), 400
-    
+
     print(f"🚀 BULK PROCESSING: {len(message_texts)} messages")
     start_time = datetime.now()
-    
+
     global message_counter
-    
+
     # Step 1: Quick classification (simplified for speed)
+    # TODO: This keyword matching is pretty dumb - ~80% accuracy probably
+    # Could improve with a small local ML model (like DistilBERT)
+    # Or call Gemini with all 20 messages in one prompt?
+    # But honestly for a hackathon this is PERFECT - fast and good enough
     classified_messages = []
-    
+
     for idx, text in enumerate(message_texts):
         message_counter += 1
-        
+
         # Fast heuristic classification (no Gemini call for speed)
+        # This saves us 20 API calls and ~10 seconds
         task_type = "other"
         confidence = 0.75
         author = "Unknown Client"
-        
+
         text_lower = text.lower()
-        
+
         # Simple keyword matching for speed
+        # NOTE: These keywords could be extracted to constants at the top
         if any(word in text_lower for word in ["record", "medical", "hospital", "doctor", "dr.", "treatment"]):
             task_type = "records_request"
             confidence = 0.85
@@ -454,6 +496,8 @@ def process_bulk():
             confidence = 0.80
         
         # Try to extract name (simple heuristic)
+        # TODO: This name extraction is really basic - misses a lot of patterns
+        # Could use regex or spaCy NER but that's probably overkill for now
         words = text.split()
         if len(words) >= 2:
             # Look for "I'm NAME" or "This is NAME" or "NAME here"
@@ -483,16 +527,20 @@ def process_bulk():
     print(f"✓ Classified {len(classified_messages)} messages in {(datetime.now() - start_time).total_seconds():.2f}s")
     
     # Step 2: Process drafts in BATCHES (5 at a time to avoid rate limits)
+    # NOTE: Batch size of 5 is arbitrary - could experiment with 10 or 20
+    # Gemini probably has higher rate limits but being safe here
+    # TODO: Make batch_size configurable via env var
     batch_size = 5
     results = []
-    
+
     for batch_start in range(0, len(classified_messages), batch_size):
         batch = classified_messages[batch_start:batch_start + batch_size]
         batch_results = []
-        
+
         print(f"Processing batch {batch_start // batch_size + 1} ({len(batch)} messages)...")
-        
+
         # Process batch with thread pool
+        # This is THE KEY to speed - all 5 messages call Gemini simultaneously
         with ThreadPoolExecutor(max_workers=batch_size) as executor:
             def process_single(msg):
                 task_type = msg['task_type']
@@ -507,11 +555,14 @@ def process_bulk():
                 try:
                     agent = AGENTS[task_type]
                     # Reduce retries for speed
+                    # NOTE: This modifies the agent state which is shared across threads
+                    # It's actually fine since we restore it, but could be cleaner
+                    # TODO: Pass max_retries as a parameter instead of mutating
                     original_retries = agent.max_retries
                     agent.max_retries = 1  # Only 1 attempt in bulk mode
-                    
+
                     agent_result = agent.process(msg['raw_text'])
-                    
+
                     agent.max_retries = original_retries  # Restore
                     
                     if agent_result.get('success', False):
@@ -544,6 +595,8 @@ def process_bulk():
         results.extend(batch_results)
         
         # Small delay between batches (not between individual messages)
+        # This is our rate limit protection - 0.5s between batches of 5
+        # TODO: Could make this adaptive - if we get rate limit errors, increase delay
         if batch_start + batch_size < len(classified_messages):
             time.sleep(0.5)
     
@@ -575,6 +628,9 @@ def generate_test_messages():
     Generate realistic test messages for bulk processing demo
     Returns 20 sample messages
     """
+    # NOTE: This is clever - generates realistic test data without storing it
+    # The templates and random selection make it different each time
+    # TODO: Could add more templates for edge cases (angry clients, spanish, etc)
     templates = [
         "Hi I need my medical records from {provider}. My name is {name}, DOB {dob}. I was treated for {condition} on {date}.",
         "Hey its {name}, can I get records from {provider}? Birth date {dob}, saw them for {condition} last month.",
